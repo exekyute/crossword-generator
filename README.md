@@ -2,6 +2,8 @@
 
 A crossword puzzle generator that runs in the browser. It is a single HTML file with no dependencies, no build step, and no network access.
 
+Play it here: https://exekyute.github.io/crossword-generator/
+
 ## Features
 
 - Three difficulty levels: Kids, Teens, and Adults
