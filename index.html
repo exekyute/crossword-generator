@@ -256,7 +256,7 @@
 <div class="wrap">
   <header>
     <h1>Crossword Generator</h1>
-    <p>Pick a level and a topic, then solve. Every puzzle is freshly generated.</p>
+    <p>Compact micro puzzles. Pick a level and a topic, then solve. Every puzzle is freshly generated.</p>
   </header>
 
   <div class="controls">
@@ -524,6 +524,8 @@ function shuffle(arr) {
 function buildLayout(entries, opts = {}) {
   const maxLen = opts.maxLen || 99;
   const maxWords = opts.maxWords || 99;
+  const maxCols = opts.maxCols || 99; // hard width cap (columns)
+  const maxRows = opts.maxRows || 99; // hard height cap (rows)
   // Normalize, drop words too long for the target grid width.
   const words = entries
     .map(e => ({ word: e[0].toUpperCase().replace(/[^A-Z]/g, ""), clue: e[1] }))
@@ -534,6 +536,18 @@ function buildLayout(entries, opts = {}) {
   const placed = []; // {word, clue, r, c, dir} dir: 'A' or 'D'
   const grid = new Map(); // "r,c" -> letter
   const key = (r, c) => r + "," + c;
+
+  // Running bounding box, kept in sync as words are placed.
+  let bMinR = 0, bMaxR = 0, bMinC = 0, bMaxC = 0;
+
+  // Would placing this word keep the whole grid within the caps?
+  function withinBounds(word, r, c, dir) {
+    const endR = dir === "D" ? r + word.length - 1 : r;
+    const endC = dir === "A" ? c + word.length - 1 : c;
+    const nMinR = Math.min(bMinR, r), nMaxR = Math.max(bMaxR, endR);
+    const nMinC = Math.min(bMinC, c), nMaxC = Math.max(bMaxC, endC);
+    return (nMaxC - nMinC + 1) <= maxCols && (nMaxR - nMinR + 1) <= maxRows;
+  }
 
   function letterAt(r, c) {
     return grid.has(key(r, c)) ? grid.get(key(r, c)) : null;
@@ -573,6 +587,10 @@ function buildLayout(entries, opts = {}) {
       grid.set(key(r + dr * i, c + dc * i), item.word[i]);
     }
     placed.push({ word: item.word, clue: item.clue, r, c, dir });
+    const endR = r + dr * (item.word.length - 1);
+    const endC = c + dc * (item.word.length - 1);
+    bMinR = Math.min(bMinR, r); bMaxR = Math.max(bMaxR, endR);
+    bMinC = Math.min(bMinC, c); bMaxC = Math.max(bMaxC, endC);
   }
 
   // Seed with the first word horizontally.
@@ -596,6 +614,7 @@ function buildLayout(entries, opts = {}) {
             r = p.r + i;
             c = p.c - j;
           }
+          if (!withinBounds(item.word, r, c, dir)) continue;
           const score = canPlace(item.word, r, c, dir);
           if (score > 0) {
             const cand = { r, c, dir, score };
@@ -667,6 +686,16 @@ function populateTopics() {
 // font at ~16px, which stops mobile browsers from zooming on focus).
 const MIN_READABLE = 30;
 
+// Grids stay box-bounded so they never overflow or run too tall. The bound
+// scales with the screen: small (micro) on phones, roomier on tablets and
+// desktops where there is space to keep cells readable.
+const SIZE_PROFILES = [
+  { maxWidth: 520,      maxCols: 9,  maxWords: 7 },   // phone
+  { maxWidth: 900,      maxCols: 12, maxWords: 10 },  // tablet
+  { maxWidth: Infinity, maxCols: 15, maxWords: 13 }   // desktop
+];
+const EXTRA_ROWS = 4; // a grid may be up to this many rows taller than it is wide
+
 function availableWidth() {
   const card = el.grid.parentElement;
   const cs = getComputedStyle(card);
@@ -678,27 +707,26 @@ function generate() {
   const topic = el.topic.value || Object.keys(DATA[level])[0];
   const entries = DATA[level][topic];
 
-  // How many columns can fit at a readable size on this screen?
+  // Pick a size profile for this screen, then never exceed the columns that
+  // actually fit at a readable cell size.
   const avail = availableWidth();
-  const maxCols = Math.max(7, Math.floor((avail + 2) / (MIN_READABLE + 2)));
-  const maxLen = Math.min(maxCols, 12);
+  const profile = SIZE_PROFILES.find(p => avail <= p.maxWidth);
+  const fitCols = Math.max(6, Math.floor((avail + 2) / (MIN_READABLE + 2)));
+  const maxCols = Math.min(fitCols, profile.maxCols);
+  const maxRows = maxCols + EXTRA_ROWS;
+  const maxLen = maxCols;            // no word longer than the grid is wide
+  const maxWords = profile.maxWords;
 
-  // Fewer words on a narrow screen so the grid stays compact and readable
-  // rather than being squashed to fit.
-  let maxWords;
-  if (maxCols <= 10) maxWords = 7;
-  else if (maxCols <= 15) maxWords = level === "kids" ? 8 : 10;
-  else maxWords = level === "kids" ? 9 : level === "teens" ? 11 : 13;
-
-  // Generate several puzzles, keep the richest one that fits the width.
-  let best = null, compact = null;
-  for (let attempt = 0; attempt < 30; attempt++) {
-    const l = buildLayout(entries, { maxLen, maxWords });
-    if (!compact || l.cols < compact.cols) compact = l;
-    if (l.cols <= maxCols && (!best || l.words.length > best.words.length)) best = l;
-    if (best && best.words.length >= Math.min(maxWords, entries.length)) break;
+  // The layout engine enforces the box, so every result already fits.
+  // Generate a few and keep the one with the most words.
+  let best = null;
+  const opts = { maxLen, maxWords, maxCols, maxRows };
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const l = buildLayout(entries, opts);
+    if (!best || l.words.length > best.words.length) best = l;
+    if (best.words.length >= Math.min(maxWords, entries.length)) break;
   }
-  layout = best || compact;
+  layout = best;
   render();
 }
 
